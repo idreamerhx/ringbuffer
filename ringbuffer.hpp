@@ -154,7 +154,7 @@ namespace detail
         // constructor/destructor
         //
         // -- RAII/RRID compliant
-        //      (see en.wikipedia.org/wiki/Resource_Acquisition_Is_Initialization)
+        //    (see en.wikipedia.org/wiki/Resource_Acquisition_Is_Initialization)
         //
         // -- strong exception guarantee
         //      (see https://en.wikipedia.org/wiki/Exception_safety)
@@ -320,8 +320,8 @@ namespace detail
         //      to the current progress of read up to the failure point.
         //
         template <template <typename...> class OutputContainer = std::vector,
-            typename = std::enable_if_t
-                <detail::has_reserve<OutputContainer<T>>::value>>
+            typename = typename std::enable_if
+                <detail::has_reserve<OutputContainer<T>>::value>::type>
         inline OutputContainer<T> read (std::size_t n)
         {
             if (n <= available) {
@@ -355,8 +355,8 @@ namespace detail
         //      to the current progress of read up to the failure point.
         //
         template <template <typename...> class OutputContainer = std::vector,
-            typename = std::enable_if_t
-                <not detail::has_reserve<OutputContainer<T>>::value>,
+            typename = typename std::enable_if
+                <not detail::has_reserve<OutputContainer<T>>::value>::type,
             bool /*unused, avoids template redeclaration*/ = bool{}>
         inline OutputContainer<T> read (std::size_t n)
         {
@@ -376,8 +376,8 @@ namespace detail
         }
 
 
-        // safely read n elements from the ringbuffer, if there are sufficiently many
-        // available elements to access; otherwise throw std::out_of_range
+        // safely read n elements from the ringbuffer, if there are sufficiently
+        // many available elements to access; otherwise throw std::out_of_range
         // exception.
         //
         // note:
@@ -400,8 +400,8 @@ namespace detail
         //      no state is modified, as if the function was not called.
         //
         template <template <typename...> class OutputContainer = std::vector,
-            typename = std::enable_if_t
-                <detail::has_reserve<OutputContainer<T>>::value>>
+            typename = typename std::enable_if
+                <detail::has_reserve<OutputContainer<T>>::value>::type>
         inline OutputContainer<T> safe_read (std::size_t n)
         {
             if (n <= available) {
@@ -422,8 +422,8 @@ namespace detail
         }
 
 
-        // safely read n elements from the ringbuffer, if there are sufficiently many
-        // available elements to access; otherwise throw std::out_of_range
+        // safely read n elements from the ringbuffer, if there are sufficiently
+        // many available elements to access; otherwise throw std::out_of_range
         // exception.
         //
         // note:
@@ -442,8 +442,8 @@ namespace detail
         //      no state is modified, as if the function was not called.
         //
         template <template <typename...> class OutputContainer = std::vector,
-            typename = std::enable_if_t
-                <not detail::has_reserve<OutputContainer<T>>::value>,
+            typename = typename std::enable_if
+                <not detail::has_reserve<OutputContainer<T>>::value>::type,
             bool /*unused, avoids template redeclaration*/ = bool{}>
         inline OutputContainer<T> safe_read (std::size_t n)
         {
