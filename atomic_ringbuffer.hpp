@@ -1,4 +1,3 @@
-// datum : smart, composable random data generation
 // atomic_ringbuffer
 //      : a threadsafe, fixed (at compile time) sized circular
 //        buffer type supporting multiple readers and one
@@ -30,12 +29,13 @@
 //      
 //          1)  all view operations are guaranteed as nothrow/noexcept;
 //          2) `read` opeartions provide the basic exception safety guarantee;
-//          3) `safe_read` operations provide the strong exception safety guarantee.
+//          3) `safe_read` operations provide the strong exception safety
+//             guarantee.
 //
 //     All of the above are documented as such in source. 
 
-#ifndef DATUM_RINGBUFFER_HPP
-#define DATUM_RINGBUFFER_HPP
+#ifndef ATOMIC_RINGBUFFER_HPP
+#define ATOMIC_RINGBUFFER_HPP
 
 #include <array>       // std::array
 #include <atomic>      // std::atomic<..>
@@ -44,9 +44,7 @@
 #include <type_traits> // std::is_default_constructible
 #include <vector>      // std::vector
 
-namespace datum
-{    
-namespace utility
+namespace ringbuffer
 {
 namespace detail
 {
@@ -79,15 +77,15 @@ namespace detail
     class rw_mutex
     {
     private:
-        std::mutex mut;
-        std::atomic_size_t readers;
+        mutable std::mutex mut;
+        mutable std::atomic_size_t readers;
 
         struct reader_entity
         {
         private:
-            rw_mutex * parent;
+            rw_mutex const * parent;
         public:
-            reader_entity (rw_mutex * p) noexcept
+            reader_entity (rw_mutex const * p) noexcept
                 : parent (p)
             {
                 parent->read_lock ();
@@ -102,9 +100,9 @@ namespace detail
         struct writer_entity
         {
         private:
-            rw_mutex * parent;
+            rw_mutex const * parent;
         public:
-            writer_entity (rw_mutex * p) noexcept
+            writer_entity (rw_mutex const * p) noexcept
                 : parent (p)
             {
                 parent->write_lock ();
@@ -116,26 +114,26 @@ namespace detail
             }
         };
 
-        void read_lock (void) noexcept
+        void read_lock (void) const noexcept
         {
             mut.lock ();
             readers += 1;
             mut.unlock ();
         }
 
-        void read_unlock (void) noexcept
+        void read_unlock (void) const noexcept
         {
             if (readers.load())
                 readers -= 1;
         }
 
-        void write_lock (void) noexcept
+        void write_lock (void) const noexcept
         {
             while (!mut.try_lock())
                 continue;
         }
 
-        void write_unlock (void) noexcept
+        void write_unlock (void) const noexcept
         {
             mut.unlock ();
         }
@@ -147,12 +145,12 @@ namespace detail
         rw_mutex (rw_mutex const&) = delete;
         rw_mutex& operator= (rw_mutex const&) = delete;
 
-        reader_entity reader (void) noexcept
+        reader_entity reader (void) const noexcept
         {
             return reader_entity (this);
         }
 
-        writer_entity writer (void) noexcept
+        writer_entity writer (void) const noexcept
         {
             return writer_entity (this);
         }
@@ -205,7 +203,7 @@ namespace detail
 
             // ensure we don't actually read more elements
             // than is possible.
-            n = std::min (n, available);
+            n = std::min (n, available.load());
 
             std::vector<T> buffcopy;
             buffcopy.reserve (n);
@@ -633,7 +631,7 @@ namespace detail
         inline void erase (std::size_t n) noexcept (noexcept(~T()))
         {
             auto write = rwlock.writer ();
-            auto m = std::min (n, available);
+            auto m = std::min (n, available.load());
             while (m--) {
                 readpos->~T();
                 readpos.store (wrapfront(readpos.load()));
@@ -667,6 +665,5 @@ namespace detail
             erase (available);
         }
     };
-} // namespace utility
-} // namespace datum
-#endif // ifndef DATUM_RINGBUFFER_HPP
+} // namespace ringbuffer
+#endif // ifndef ATOMIC_RINGBUFFER_HPP

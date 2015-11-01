@@ -1,4 +1,3 @@
-// datum : smart, composable random data generation
 // ringbuffer : a fixed (at compile time) sized circular
 //              buffer type.
 //
@@ -34,21 +33,20 @@
 //      
 //          1)  all view operations are guaranteed as nothrow/noexcept;
 //          2) `read` opeartions provide the basic exception safety guarantee;
-//          3) `safe_read` operations provide the strong exception safety guarantee.
+//          3) `safe_read` operations provide the strong exception safety
+//             guarantee.
 //
 //     All of the above are documented as such in source. 
 
-#ifndef DATUM_RINGBUFFER_HPP
-#define DATUM_RINGBUFFER_HPP
+#ifndef RINGBUFFER_HPP
+#define RINGBUFFER_HPP
 
 #include <array>       // std::array
 #include <type_traits> // std::is_default_constructible
 #include <vector>      // std::vector
 
-namespace datum
+namespace ringbuffer
 {    
-namespace utility
-{
 namespace detail
 {
     template <typename T>
@@ -565,6 +563,5 @@ namespace detail
             erase (available);
         }
     };
-} // namespace utility
-} // namespace datum
-#endif // ifndef DATUM_RINGBUFFER_HPP
+} // namespace ringbuffer
+#endif // ifndef RINGBUFFER_HPP
