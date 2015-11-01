@@ -3,9 +3,9 @@ ringbuffer
 ==========
 
 A single header C++ implementation of threadsafe and non-threadsafe fixed-size,
-templated, STL-style cicular buffers (`atomic_ringbuffer.hpp` and
-`ringbuffer.hpp`, respectively). Both versions support full RAII/RRID compliance
-and strong exception safety guarantees wherever possible.
+templated, STL-style cicular buffers (``atomic_ringbuffer.hpp`` and
+``ringbuffer.hpp``, respectively). Both versions support full RAII/RRID
+compliance and strong exception safety guarantees wherever possible.
 
 -------
 License
