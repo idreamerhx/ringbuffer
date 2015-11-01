@@ -1,7 +1,5 @@
-// atomic_ringbuffer
-//      : a threadsafe, fixed (at compile time) sized circular
-//        buffer type supporting multiple readers and one
-//        writer.
+// ringbuffer : a fixed (at compile time) sized circular
+//              buffer type.
 //
 // Author: Dalton Woodard
 // Contact: daltonmwoodar@gmail.com
@@ -9,6 +7,12 @@
 //
 
 
+// note:
+//      This implementation is NOT threadsafe. Please see
+//      https://github.com/daltonwoodard/ringbuffer.git for
+//      a thread-safe version implemented with C++ atomic
+//      primitives.
+//
 // note:
 //      While this type is lasted by a std::array object,
 //      and can therefore exist entirely on the stack, it
@@ -34,18 +38,15 @@
 //
 //     All of the above are documented as such in source. 
 
-#ifndef ATOMIC_RINGBUFFER_HPP
-#define ATOMIC_RINGBUFFER_HPP
+#ifndef RINGBUFFER_HPP
+#define RINGBUFFER_HPP
 
 #include <array>       // std::array
-#include <atomic>      // std::atomic<..>
-#include <mutex>       // std::shared_mutext, std::lock_guard,
-                       // std::shared_lock
 #include <type_traits> // std::is_default_constructible
 #include <vector>      // std::vector
 
 namespace ringbuffer
-{
+{    
 namespace detail
 {
     template <typename T>
@@ -66,98 +67,9 @@ namespace detail
         static constexpr bool value =
             sizeof(test<T>(0)) == sizeof(succeeds);
     };
-
-
-    // a simple multiple reader, single
-    // writer shared mutex, which spins
-    // when waiting for a write oprotunity.
-    //
-    // -- RAII/RRID compliant
-    //
-    class rw_mutex
-    {
-    private:
-        mutable std::mutex mut;
-        mutable std::atomic_size_t readers;
-
-        struct reader_entity
-        {
-        private:
-            rw_mutex const * parent;
-        public:
-            reader_entity (rw_mutex const * p) noexcept
-                : parent (p)
-            {
-                parent->read_lock ();
-            }
-
-            ~reader_entity (void) noexcept
-            {
-                parent->read_unlock ();
-            }
-        };
-
-        struct writer_entity
-        {
-        private:
-            rw_mutex const * parent;
-        public:
-            writer_entity (rw_mutex const * p) noexcept
-                : parent (p)
-            {
-                parent->write_lock ();
-            }
-
-            ~writer_entity (void) noexcept
-            {
-                parent->write_unlock ();
-            }
-        };
-
-        void read_lock (void) const noexcept
-        {
-            mut.lock ();
-            readers += 1;
-            mut.unlock ();
-        }
-
-        void read_unlock (void) const noexcept
-        {
-            if (readers.load())
-                readers -= 1;
-        }
-
-        void write_lock (void) const noexcept
-        {
-            while (!mut.try_lock())
-                continue;
-        }
-
-        void write_unlock (void) const noexcept
-        {
-            mut.unlock ();
-        }
-
-    public:
-        rw_mutex  (void) noexcept = default;
-        ~rw_mutex (void) noexcept = default;
-
-        rw_mutex (rw_mutex const&) = delete;
-        rw_mutex& operator= (rw_mutex const&) = delete;
-
-        reader_entity reader (void) const noexcept
-        {
-            return reader_entity (this);
-        }
-
-        writer_entity writer (void) const noexcept
-        {
-            return writer_entity (this);
-        }
-    };
 } // namespace detail
  
-    template <std::size_t N, typename T>
+    template <typename T, std::size_t N>
     class ringbuffer
     {
         static_assert (N > 0, "empty ringbuffer disallowed");
@@ -172,12 +84,191 @@ namespace detail
         backing_ptr const first;
         backing_ptr const last;
 
-        std::atomic<backing_ptr> writepos;
-        std::atomic<backing_ptr> readpos;
-        std::atomic_size_t       available;
+        backing_ptr writepos;
+        backing_ptr readpos;
+        std::size_t available;
 
-        detail::rw_mutex rwlock;
+        template <typename U,
+            typename NoQualsU = typename std::remove_cv<U>::type>
+        class rb_iterator :
+            public std::iterator<std::random_access_iterator_tag,
+                                 NoQualsU,
+                                 std::ptrdiff_t,
+                                 U*,
+                                 U&>
+        {
+        private:
+            U* iter;
+            U const* first;
+            U const* last;
 
+            using piter_type = std::iterator<std::random_access_iterator_tag,
+                                             NoQualsU,
+                                             std::ptrdiff_t,
+                                             U*,
+                                             U&>;
+
+        public:
+            using difference_type   = typename piter_type::difference_type;
+            using value_type        = typename piter_type::value_type;
+            using pointer           = typename piter_type::pointer;
+            using reference         = typename piter_type::reference;
+            using iterator_category = typename piter_type::iterator_category;
+
+            rb_iterator (void) = delete;
+            rb_iterator (U * p, U const* f, U const* l)
+                : iter (p), first (f), last (l)
+            {}
+
+            void swap (rb_iterator & other)
+            {
+                std::swap (iter, other.iter);
+                std::swap (first, other.first);
+                std::swap (last, other.last);
+            }
+
+            rb_iterator<U>& operator++ (void)
+            {
+                if (iter == last)
+                    iter = first;
+                else
+                    iter += 1;
+                return *this;
+            }
+
+            rb_iterator<U>& operator-- (void)
+            {
+                if (iter == first)
+                    iter = last;
+                else
+                    iter -= 1;
+                return *this;
+            }
+
+            rb_iterator<U> operator++ (int)
+            {
+                auto tmp (*this);
+                if (iter == last)
+                    iter = first;
+                else
+                    iter += 1;
+                return tmp;
+            }
+
+            rb_iterator<U> operator-- (int)
+            {
+                auto tmp (*this);
+                if (iter == first)
+                    iter = last;
+                else
+                    iter -= 1;
+                return tmp;
+            }
+
+            rb_iterator<U>& operator+= (difference_type n)
+            {
+                if (n > N || -n > N) n = n % N;
+
+                if (n >= 0) {
+                    if (iter + n > last)
+                        iter = first + (n - 1 - (last - iter));
+                    else
+                        iter = iter + n;
+                } else {
+                    auto m = -n;
+                    if (iter - m < first)
+                        iter = last - (m - 1 - (iter - first));
+                    else
+                        iter = iter - m;
+                }
+
+                return *this;
+            }
+
+            rb_iterator<U>& operator-= (difference_type n)
+            {
+                return this->operator+= (-n);
+            }
+
+            rb_iterator<U> operator+ (difference_type n) const
+            {
+                auto tmp = *this;
+                return (tmp += n); 
+            }
+
+            rb_iterator<U> operator- (difference_type n) const
+            {
+                auto tmp = *this;
+                return (tmp -= n);
+            }
+
+            difference_type operator- (rb_iterator<U const> const rhs) const
+            {
+                return iter - rhs.iter;
+            }
+
+            template <template <typename...> class O>
+            bool operator== (O<U> const& rhs) const
+            {
+                return iter == rhs.iter;
+            }
+
+            template <template <typename...> class O>
+            bool operator!= (O<U> const& rhs) const
+            {
+                return iter != rhs.iter;
+            }
+
+            template <template <typename...> class O>
+            bool operator< (O<U> const& rhs) const
+            {
+                return iter < rhs.iter;
+            }
+
+            template <template <typename...> class O>
+            bool operator> (O<U> const& rhs) const
+            {
+                return iter > rhs.iter;
+            }
+
+            template <template <typename...> class O>
+            bool operator<= (O<U> const& rhs) const
+            {
+                return iter <= rhs.iter;
+            }
+
+            template <template <typename...> class O>
+            bool operator>= (O<U> const& rhs) const
+            {
+                return iter >= rhs.iter;
+            }
+
+            U& operator* (void) const
+            {
+                return *iter;
+            }
+
+            U& operator[] (difference_type n)
+            {
+                if (n > N || -n > N) n = n % N;
+                return *(*this + n);
+            }
+
+            U& operator-> (void) const
+            {
+                return *iter;
+            }
+
+            operator rb_iterator<U const> (void) const
+            {
+                return rb_iterator<U const> (iter, first, last);
+            }
+        };
+
+
+        // increment pointer through the buffer with modular
+        // arithmetic.
+        // 
         inline backing_ptr wrapfront
             (backing_ptr const p, std::size_t n = 1) const noexcept
         {
@@ -193,17 +284,11 @@ namespace detail
 
         // generate a temporary copy of the buffer elements
         //
-        // note:
-        //      this operation blocks all writes until completed. 
-        //
         std::vector<T> temporary_copy (std::size_t n) const
         {
-            // ensure no writes happen durring copy
-            auto read = rwlock.reader ();
-
             // ensure we don't actually read more elements
             // than is possible.
-            n = std::min (n, available.load());
+            n = std::min (n, available);
 
             std::vector<T> buffcopy;
             buffcopy.reserve (n);
@@ -242,7 +327,19 @@ namespace detail
         }
 
     public:
-        using value_type = T;
+        using value_type      = T;
+        using size_type       = std::size_t;
+        using difference_type = std::ptrdiff_t;
+        using reference       = T&;
+        using const_reference = T const&;
+        using pointer         = T*;
+        using const_pointer   = T const*;
+
+        // no modification through iterators; only
+        // observatino.
+        using iterator        = rb_iterator<T const>;
+        using const_iterator  = rb_iterator<T const>;
+
 
         // constructor/destructor
         //
@@ -276,7 +373,7 @@ namespace detail
         //
         inline std::size_t size (void) const noexcept
         {
-            return available.load ();
+            return available;
         }
 
 
@@ -287,7 +384,54 @@ namespace detail
         //
         inline std::size_t capacity (void) const noexcept
         {
-            return N - available.load ();
+            return N - available;
+        }
+
+
+        // obtain iterator to the start of the buffer;
+        // no modifications are allowed through iterators,
+        // so we return a const_iterator.
+        //
+        // -- nothrow
+        //
+        const_iterator begin (void) const noexcept
+        {
+            return cbegin ();
+        }
+
+
+        // obtain iterator to the end of the buffer'
+        // no modifications are allowed through iterators,
+        // so we return a const_iterator.
+        //
+        // -- nothrow
+        //
+        const_iterator end (void) const noexcept
+        {
+            return cend ();
+        }
+
+
+        // obtain const iterator to the start of the buffer 
+        //
+        // -- nothrow
+        //
+        const_iterator cbegin (void) const noexcept
+        {
+            return const_iterator (readpos, first, last);
+        }
+
+
+        // obtain const iterator to the end of the buffer 
+        //
+        // -- nothrow
+        //
+        const_iterator cend (void) const noexcept
+        {
+            return const_iterator
+                (wrapfront (readpos, available),
+                 first,
+                 last);
         }
 
 
@@ -308,10 +452,9 @@ namespace detail
         template <typename ... Args>
         inline void emplace (Args && ... args) noexcept(noexcept(T(args...)))
         {
-            auto write = rwlock.writer ();
-            if (available.load() < N) {
+            if (available < N) {
                 new (writepos) T(args...);
-                writepos.store (wrapfront(writepos.load()));
+                writepos = wrapfront (writepos);
                 available += 1;
             }
         }
@@ -340,10 +483,9 @@ namespace detail
         //
         inline void pop (void) noexcept (noexcept(~T()))
         {
-            auto write = rwlock.writer ();
-            if (available.load()) {
+            if (available) {
                 readpos->~T();
-                readpos.store (wrapfront(readpos.load()));
+                readpos = wrapfront (readpos);
                 available -= 1;
             }
         }
@@ -363,8 +505,7 @@ namespace detail
         //
         inline T front (void)
         {
-            auto read = rwlock.reader ();
-            if (available.load ()) {
+            if (available) {
                 return *readpos;
             } else {
                  throw std::out_of_range
@@ -387,11 +528,10 @@ namespace detail
         //
         inline T read (void)
         {
-            auto write = rwlock.writer ();
             if (available) {
                 available -= 1;
                 auto deref = readpos;
-                readpos.store (wrapfront(readpos.load()));
+                readpos = wrapfront (readpos);
                 return *deref;
             } else {
                 throw std::out_of_range ("invalid read on empty ringbuffer");
@@ -421,14 +561,13 @@ namespace detail
                 <detail::has_reserve<OutputContainer<T>>::value>::type>
         inline OutputContainer<T> read (std::size_t n)
         {
-            auto write = rwlock.writer ();
             if (n <= available) {
                 OutputContainer<T> result;
                 result.reserve (n);
                 auto const cap = available - n;
                 while (available-- > cap) {
                     auto deref = readpos;
-                    readpos.store (wrapfront(readpos.load()));
+                    readpos    = wrapfront (readpos);
                     result.emplace_back (*deref);
                 }
                 return result;
@@ -458,13 +597,12 @@ namespace detail
             bool /*unused, avoids template redeclaration*/ = bool{}>
         inline OutputContainer<T> read (std::size_t n)
         {
-            auto write = rwlock.writer ();
             if (n <= available) {
                 OutputContainer<T> result;
                 auto const cap = available - n;
                 while (available-- > cap) {
                     auto deref = readpos;
-                    readpos.store (wrapfront(readpos.load()));
+                    readpos    = wrapfront (readpos);
                     result.emplace_back (*deref);
                 }
                 return result;
@@ -503,7 +641,6 @@ namespace detail
                 <detail::has_reserve<OutputContainer<T>>::value>::type>
         inline OutputContainer<T> safe_read (std::size_t n)
         {
-            auto write = rwlock.writer ();
             if (n <= available) {
                 OutputContainer<T> result;
                 result.reserve (n);
@@ -513,7 +650,7 @@ namespace detail
                         result.emplace_back (std::move(e));
                 }
                 available -= n;
-                readpos.store (wrapfront(readpos.load(), n));
+                readpos = wrapfront(readpos, n);
                 return result;
             } else {
                 throw std::out_of_range
@@ -547,7 +684,6 @@ namespace detail
             bool /*unused, avoids template redeclaration*/ = bool{}>
         inline OutputContainer<T> safe_read (std::size_t n)
         {
-            auto write = rwlock.writer ();
             if (n <= available) {
                 OutputContainer<T> result;
                 {
@@ -556,7 +692,7 @@ namespace detail
                         result.emplace_back (std::move(e));
                 }
                 available -= n;
-                readpos.store (wrapfront(readpos.load(), n));
+                readpos = wrapfront (readpos, n);
                 return result;
             } else {
                 throw std::out_of_range
@@ -630,11 +766,10 @@ namespace detail
         //
         inline void erase (std::size_t n) noexcept (noexcept(~T()))
         {
-            auto write = rwlock.writer ();
-            auto m = std::min (n, available.load());
+            auto m = std::min (n, available);
             while (m--) {
                 readpos->~T();
-                readpos.store (wrapfront(readpos.load()));
+                readpos = wrapfront (readpos);
                 available -= 1;
             }
         }
@@ -666,4 +801,4 @@ namespace detail
         }
     };
 } // namespace ringbuffer
-#endif // ifndef ATOMIC_RINGBUFFER_HPP
+#endif // ifndef RINGBUFFER_HPP
