@@ -44,7 +44,7 @@
 #include <type_traits> // std::is_default_constructible
 #include <vector>      // std::vector
 
-namespace ringbuffer
+namespace atomic_ringbuffer
 {
 namespace detail
 {
@@ -158,7 +158,7 @@ namespace detail
 } // namespace detail
  
     template <typename T, std::size_t N>
-    class ringbuffer
+    class atomic_ringbuffer
     {
         static_assert (N > 0, "empty ringbuffer disallowed");
         static_assert (std::is_default_constructible<T>::value,
@@ -453,7 +453,7 @@ namespace detail
         //      propogates an exception catchable as std::exception;
         //      no state is modified, as if the function was not called.
         //
-        ringbuffer (void) noexcept(noexcept(std::begin(buff)))
+        atomic_ringbuffer (void) noexcept(noexcept(std::begin(buff)))
             : buff      (), 
               first     (buff.data()),
               last      (buff.data() + N - 1),
@@ -462,7 +462,7 @@ namespace detail
               available (0)
         {}
 
-        ~ringbuffer (void) noexcept (noexcept(~T())) = default;
+        ~atomic_ringbuffer (void) noexcept (noexcept(~T())) = default;
 
 
         // obtain number of buffered objects; i.e., available
@@ -472,7 +472,7 @@ namespace detail
         //
         inline std::size_t size (void) const noexcept
         {
-            return available.load ();
+            return available;
         }
 
 
@@ -517,7 +517,7 @@ namespace detail
         //
         const_iterator cbegin (void) const noexcept
         {
-            return const_iterator (readpos.load(), first, last);
+            return const_iterator (readpos, first, last);
         }
 
 
@@ -528,7 +528,7 @@ namespace detail
         const_iterator cend (void) const noexcept
         {
             return const_iterator
-                (wrapfront (readpos.load(), available.load()),
+                (wrapfront (readpos, available),
                  first,
                  last);
         }
@@ -553,8 +553,8 @@ namespace detail
         {
             auto write = rwlock.writer ();
             if (available.load() < N) {
-                new (writepos) T(args...);
-                writepos.store (wrapfront(writepos.load()));
+                new (writepos.load()) T(args...);
+                writepos = wrapfront(writepos);
                 available += 1;
             }
         }
@@ -586,7 +586,7 @@ namespace detail
             auto write = rwlock.writer ();
             if (available.load()) {
                 readpos->~T();
-                readpos.store (wrapfront(readpos.load()));
+                readpos = wrapfront(readpos);
                 available -= 1;
             }
         }
@@ -633,8 +633,8 @@ namespace detail
             auto write = rwlock.writer ();
             if (available) {
                 available -= 1;
-                auto deref = readpos;
-                readpos.store (wrapfront(readpos.load()));
+                auto deref = readpos.load();
+                readpos = wrapfront (readpos);
                 return *deref;
             } else {
                 throw std::out_of_range ("invalid read on empty ringbuffer");
@@ -670,8 +670,8 @@ namespace detail
                 result.reserve (n);
                 auto const cap = available - n;
                 while (available-- > cap) {
-                    auto deref = readpos;
-                    readpos.store (wrapfront(readpos.load()));
+                    auto deref = readpos.load();
+                    readpos = wrapfront(readpos);
                     result.emplace_back (*deref);
                 }
                 return result;
@@ -706,8 +706,8 @@ namespace detail
                 OutputContainer<T> result;
                 auto const cap = available - n;
                 while (available-- > cap) {
-                    auto deref = readpos;
-                    readpos.store (wrapfront(readpos.load()));
+                    auto deref = readpos.load();
+                    readpos = wrapfront(readpos);
                     result.emplace_back (*deref);
                 }
                 return result;
@@ -756,7 +756,7 @@ namespace detail
                         result.emplace_back (std::move(e));
                 }
                 available -= n;
-                readpos.store (wrapfront(readpos.load(), n));
+                readpos = wrapfront(readpos, n);
                 return result;
             } else {
                 throw std::out_of_range
@@ -799,7 +799,7 @@ namespace detail
                         result.emplace_back (std::move(e));
                 }
                 available -= n;
-                readpos.store (wrapfront(readpos.load(), n));
+                readpos = wrapfront(readpos, n);
                 return result;
             } else {
                 throw std::out_of_range
@@ -877,7 +877,7 @@ namespace detail
             auto m = std::min (n, available.load());
             while (m--) {
                 readpos->~T();
-                readpos.store (wrapfront(readpos.load()));
+                readpos = wrapfront(readpos);
                 available -= 1;
             }
         }
@@ -908,5 +908,5 @@ namespace detail
             erase (available);
         }
     };
-} // namespace ringbuffer
+} // namespace atomic_ringbuffer
 #endif // ifndef ATOMIC_RINGBUFFER_HPP
