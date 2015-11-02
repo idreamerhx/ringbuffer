@@ -18,9 +18,6 @@
 //      managing ringbuffer object.
 //
 //  note:
-//      The stored object type T must be default constructable.
-//
-//  note:
 //      If and only if the stored object type T has strong exception safe
 //      constructors is the following guaranteed:
 //
@@ -32,6 +29,9 @@
 //          3) `safe_read` operations provide the strong exception safety
 //             guarantee.
 //
+//     Notice that the read operations modify the data structure (by removing
+//     elements from the front); hence they are, in actuallity, writes.
+//
 //     All of the above are documented as such in source. 
 
 #ifndef ATOMIC_RINGBUFFER_HPP
@@ -39,8 +39,7 @@
 
 #include <array>       // std::array
 #include <atomic>      // std::atomic<..>
-#include <mutex>       // std::shared_mutext, std::lock_guard,
-                       // std::shared_lock
+#include <thread>      // std::yield
 #include <type_traits> // std::is_default_constructible
 #include <vector>      // std::vector
 
@@ -51,8 +50,8 @@ namespace detail
     template <typename T>
     struct has_reserve
     {
-        struct succeeds { char _[8]; };
-        struct fails    { char _[0]; };
+        struct succeeds {};
+        struct fails    {};
 
         template <typename U, void (U::*)(std::size_t)>
         struct sfinae {};
@@ -64,9 +63,14 @@ namespace detail
         static fails test (...);
 
         static constexpr bool value =
-            sizeof(test<T>(0)) == sizeof(succeeds);
+            std::is_same<decltype(test<T>(0)), succeeds>::value;
     };
 
+    template <typename T>
+    struct memblock
+    {
+        alignas (alignof(T)) unsigned char data[sizeof(T)];
+    };
 
     // a simple multiple reader, single
     // writer shared mutex, which spins
@@ -74,22 +78,53 @@ namespace detail
     //
     // -- RAII/RRID compliant
     //
-    class rw_mutex
+    class rwlock
     {
     private:
-        mutable std::mutex mut;
+        template <uint64_t Delay = 1000>
+        struct slock
+        {
+            static constexpr bool LOCKED   = true;
+            static constexpr bool UNLOCKED = false;
+
+            std::atomic_bool held {UNLOCKED};
+
+            bool lock (void) volatile noexcept
+            {
+                while (true) {
+                    for (uint64_t i = 0; i < Delay; ++i) {
+                        if (UNLOCKED == held.exchange (LOCKED))
+                            return LOCKED;
+                    }
+                    std::this_thread::yield ();
+                }
+            }
+
+            bool unlock (void) volatile noexcept
+            {
+                return held.exchange (UNLOCKED);
+            }
+        };
+
+        mutable slock<> mut;
         mutable std::atomic_size_t readers;
 
         struct reader_entity
         {
         private:
-            rw_mutex const * parent;
+            rwlock const * parent;
         public:
-            reader_entity (rw_mutex const * p) noexcept
+            reader_entity (rwlock const * p) noexcept
                 : parent (p)
             {
                 parent->read_lock ();
             }
+
+            reader_entity (reader_entity &&)            = default;
+            reader_entity& operator= (reader_entity &&) = default;
+
+            reader_entity (reader_entity const&)            = delete;
+            reader_entity& operator= (reader_entity const&) = delete;
 
             ~reader_entity (void) noexcept
             {
@@ -100,13 +135,19 @@ namespace detail
         struct writer_entity
         {
         private:
-            rw_mutex const * parent;
+            rwlock const * parent;
         public:
-            writer_entity (rw_mutex const * p) noexcept
+            writer_entity (rwlock const * p) noexcept
                 : parent (p)
             {
                 parent->write_lock ();
             }
+
+            writer_entity (writer_entity &&)            = default;
+            writer_entity& operator= (writer_entity &&) = default;
+
+            writer_entity (writer_entity const&)            = delete;
+            writer_entity& operator= (writer_entity const&) = delete;
 
             ~writer_entity (void) noexcept
             {
@@ -129,8 +170,7 @@ namespace detail
 
         void write_lock (void) const noexcept
         {
-            while (!mut.try_lock())
-                continue;
+            mut.lock();
         }
 
         void write_unlock (void) const noexcept
@@ -139,11 +179,15 @@ namespace detail
         }
 
     public:
-        rw_mutex  (void) noexcept = default;
-        ~rw_mutex (void) noexcept = default;
+        rwlock (void) noexcept = default;
 
-        rw_mutex (rw_mutex const&) = delete;
-        rw_mutex& operator= (rw_mutex const&) = delete;
+        rwlock (rwlock &&)            = default;
+        rwlock& operator= (rwlock &&) = default;
+
+        rwlock (rwlock const&)            = delete;
+        rwlock& operator= (rwlock const&) = delete;
+
+        ~rwlock (void) noexcept = default;
 
         reader_entity reader (void) const noexcept
         {
@@ -164,7 +208,7 @@ namespace detail
         static_assert (std::is_default_constructible<T>::value,
                        "cannot buffer non-default_constructible objects");
     private:
-        using backing_type = std::array<T, N>;
+        using backing_type = std::array<detail::memblock<T>, N>;
         using backing_ptr  = typename backing_type::pointer;
 
         backing_type buff;
@@ -172,17 +216,16 @@ namespace detail
         backing_ptr const first;
         backing_ptr const last;
 
-        std::atomic<backing_ptr> writepos;
-        std::atomic<backing_ptr> readpos;
+        backing_ptr writepos;
+        backing_ptr readpos;
         std::atomic_size_t       available;
 
-        detail::rw_mutex rwlock;
+        detail::rwlock rwlock;
 
-        template <typename U,
-            typename NoQualsU = typename std::remove_cv<U>::type>
+        template <typename U>
         class atomic_rb_iterator :
             public std::iterator<std::random_access_iterator_tag,
-                                 NoQualsU,
+                                 typename std::remove_cv<U>::type,
                                  std::ptrdiff_t,
                                  U*,
                                  U&>
@@ -191,10 +234,10 @@ namespace detail
             U* iter;
             U const* first;
             U const* last;
-            detail::rw_mutex * rwlock;
+            detail::rwlock* rwlock;
 
             using piter_type = std::iterator<std::random_access_iterator_tag,
-                                             NoQualsU,
+                                             typename std::remove_cv<U>::type,
                                              std::ptrdiff_t,
                                              U*,
                                              U&>;
@@ -208,7 +251,7 @@ namespace detail
 
             atomic_rb_iterator (void) = delete;
             atomic_rb_iterator
-                (U* p, U const* f, U const* l, detail::rw_mutex * lck)
+                (U* p, U const* f, U const* l, detail::rwlock * lck)
                     : iter (p), first (f), last (l), rwlock (lck)
             {}
 
@@ -362,7 +405,7 @@ namespace detail
             }
         };
 
-        inline backing_ptr wrapfront
+        backing_ptr wrapfront
             (backing_ptr const p, std::size_t n = 1) const noexcept
         {
             if (n > N) n = n % N;
@@ -495,7 +538,8 @@ namespace detail
         //
         const_iterator begin (void) const noexcept
         {
-            return cbegin ();
+            auto read = rwlock.reader ();
+            return const_iterator (readpos, first, last);
         }
 
 
@@ -507,7 +551,11 @@ namespace detail
         //
         const_iterator end (void) const noexcept
         {
-            return cend ();
+            auto read = rwlock.reader ();
+            return const_iterator
+                (wrapfront (readpos, available),
+                 first,
+                 last);
         }
 
 
@@ -517,6 +565,7 @@ namespace detail
         //
         const_iterator cbegin (void) const noexcept
         {
+            auto read = rwlock.reader ();
             return const_iterator (readpos, first, last);
         }
 
@@ -527,6 +576,7 @@ namespace detail
         //
         const_iterator cend (void) const noexcept
         {
+            auto read = rwlock.reader ();
             return const_iterator
                 (wrapfront (readpos, available),
                  first,
@@ -553,7 +603,7 @@ namespace detail
         {
             auto write = rwlock.writer ();
             if (available.load() < N) {
-                new (writepos.load()) T(args...);
+                new (&writepos->data) T(args...);
                 writepos = wrapfront(writepos);
                 available += 1;
             }
@@ -585,7 +635,7 @@ namespace detail
         {
             auto write = rwlock.writer ();
             if (available.load()) {
-                readpos->~T();
+                reinterpret_cast<T*>(&readpos->data)->~T();
                 readpos = wrapfront(readpos);
                 available -= 1;
             }
@@ -608,7 +658,7 @@ namespace detail
         {
             auto read = rwlock.reader ();
             if (available.load ()) {
-                return *readpos;
+                return *reinterpret_cast<T*>(&readpos->data);
             } else {
                  throw std::out_of_range
                      ("cannot access first of empty ringbuffer");           
@@ -633,9 +683,9 @@ namespace detail
             auto write = rwlock.writer ();
             if (available) {
                 available -= 1;
-                auto deref = readpos.load();
+                auto deref = readpos;
                 readpos = wrapfront (readpos);
-                return *deref;
+                return *reinterpret_cast<T*>(&deref->data);
             } else {
                 throw std::out_of_range ("invalid read on empty ringbuffer");
             }
@@ -670,9 +720,9 @@ namespace detail
                 result.reserve (n);
                 auto const cap = available - n;
                 while (available-- > cap) {
-                    auto deref = readpos.load();
+                    auto deref = readpos;
                     readpos = wrapfront(readpos);
-                    result.emplace_back (*deref);
+                    result.emplace_back (*reinterpret_cast<T*>(&deref->data));
                 }
                 return result;
             } else {
@@ -706,9 +756,9 @@ namespace detail
                 OutputContainer<T> result;
                 auto const cap = available - n;
                 while (available-- > cap) {
-                    auto deref = readpos.load();
+                    auto deref = readpos;
                     readpos = wrapfront(readpos);
-                    result.emplace_back (*deref);
+                    result.emplace_back (*reinterpret_cast<T*>(&deref->data));
                 }
                 return result;
             } else {
@@ -876,7 +926,7 @@ namespace detail
             auto write = rwlock.writer ();
             auto m = std::min (n, available.load());
             while (m--) {
-                readpos->~T();
+                reinterpret_cast<T*>(&readpos->data)->~T();
                 readpos = wrapfront(readpos);
                 available -= 1;
             }

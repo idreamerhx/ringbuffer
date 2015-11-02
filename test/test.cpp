@@ -1,6 +1,3 @@
-// testing the single threaded implementation
-// of ringbuffer
-//
 
 #include <chrono>
 #include <future>
@@ -61,10 +58,10 @@ uint64_t fill_and_sum (arb_type * arb)
 
 int main (void)
 {
-    std::unique_ptr<rb_type>  rb  (new rb_type);
+    //std::unique_ptr<rb_type>  rb  (new rb_type);
     std::unique_ptr<arb_type> arb (new arb_type);
 
-    std::cout << fill_and_sum (rb.get()) << std::endl;
+    //std::cout << fill_and_sum (rb.get()) << std::endl;
     std::cout << fill_and_sum (arb.get()) << std::endl;
 
     return 0;

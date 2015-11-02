@@ -22,9 +22,6 @@
 //      managing ringbuffer object.
 //
 //  note:
-//      The stored object type T must be default constructable.
-//
-//  note:
 //      If and only if the stored object type T has strong exception safe
 //      constructors is the following guaranteed:
 //
@@ -35,6 +32,9 @@
 //          2) `read` opeartions provide the basic exception safety guarantee;
 //          3) `safe_read` operations provide the strong exception safety
 //             guarantee.
+//
+//     Notice that the read operations modify the data structure (by removing
+//     elements from the front); hence they are, in actuallity, writes.
 //
 //     All of the above are documented as such in source. 
 
@@ -52,8 +52,8 @@ namespace detail
     template <typename T>
     struct has_reserve
     {
-        struct succeeds { char _[8]; };
-        struct fails    { char _[0]; };
+        struct succeeds {};
+        struct fails    {};
 
         template <typename U, void (U::*)(std::size_t)>
         struct sfinae {};
@@ -65,7 +65,13 @@ namespace detail
         static fails test (...);
 
         static constexpr bool value =
-            sizeof(test<T>(0)) == sizeof(succeeds);
+            std::is_same<decltype(test<T>(0)), succeeds>::value;
+    };
+
+    template <typename T>
+    struct memblock
+    {
+        alignas (alignof(T)) unsigned char data[sizeof(T)];
     };
 } // namespace detail
  
@@ -76,7 +82,7 @@ namespace detail
         static_assert (std::is_default_constructible<T>::value,
                        "cannot buffer non-default_constructible objects");
     private:
-        using backing_type = std::array<T, N>;
+        using backing_type = std::array<detail::memblock<T>, N>;
         using backing_ptr  = typename backing_type::pointer;
 
         backing_type buff;
@@ -88,11 +94,10 @@ namespace detail
         backing_ptr readpos;
         std::size_t available;
 
-        template <typename U,
-            typename NoQualsU = typename std::remove_cv<U>::type>
+        template <typename U>
         class rb_iterator :
             public std::iterator<std::random_access_iterator_tag,
-                                 NoQualsU,
+                                 typename std::remove_cv<U>::type,
                                  std::ptrdiff_t,
                                  U*,
                                  U&>
@@ -103,7 +108,7 @@ namespace detail
             U const* last;
 
             using piter_type = std::iterator<std::random_access_iterator_tag,
-                                             NoQualsU,
+                                             typename std::remove_cv<U>::type,
                                              std::ptrdiff_t,
                                              U*,
                                              U&>;
@@ -269,7 +274,7 @@ namespace detail
         // increment pointer through the buffer with modular
         // arithmetic.
         // 
-        inline backing_ptr wrapfront
+        backing_ptr wrapfront
             (backing_ptr const p, std::size_t n = 1) const noexcept
         {
             if (n > N) n = n % N;
@@ -453,7 +458,7 @@ namespace detail
         inline void emplace (Args && ... args) noexcept(noexcept(T(args...)))
         {
             if (available < N) {
-                new (writepos) T(args...);
+                new (&writepos->data) T(args...);
                 writepos = wrapfront (writepos);
                 available += 1;
             }
@@ -484,7 +489,7 @@ namespace detail
         inline void pop (void) noexcept (noexcept(~T()))
         {
             if (available) {
-                readpos->~T();
+                reinterpret_cast<T*>(&readpos->data)->~T();
                 readpos = wrapfront (readpos);
                 available -= 1;
             }
@@ -532,7 +537,7 @@ namespace detail
                 available -= 1;
                 auto deref = readpos;
                 readpos = wrapfront (readpos);
-                return *deref;
+                return *reinterpret_cast<T*>(&deref->data);
             } else {
                 throw std::out_of_range ("invalid read on empty ringbuffer");
             }
@@ -568,7 +573,7 @@ namespace detail
                 while (available-- > cap) {
                     auto deref = readpos;
                     readpos    = wrapfront (readpos);
-                    result.emplace_back (*deref);
+                    result.emplace_back (*reinterpret_cast<T*>(&deref->data));
                 }
                 return result;
             } else {
@@ -603,7 +608,7 @@ namespace detail
                 while (available-- > cap) {
                     auto deref = readpos;
                     readpos    = wrapfront (readpos);
-                    result.emplace_back (*deref);
+                    result.emplace_back (*reinterpret_cast<T*>(&deref->data));
                 }
                 return result;
             } else {
@@ -768,7 +773,7 @@ namespace detail
         {
             auto m = std::min (n, available);
             while (m--) {
-                readpos->~T();
+                reinterpret_cast<T*>(&readpos->data)->~T();
                 readpos = wrapfront (readpos);
                 available -= 1;
             }
