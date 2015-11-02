@@ -513,7 +513,7 @@ namespace detail
         //
         // -- nothrow
         //
-        inline std::size_t size (void) const noexcept
+        std::size_t size (void) const noexcept
         {
             return available;
         }
@@ -524,7 +524,7 @@ namespace detail
         //
         // -- nothrow
         //
-        inline std::size_t capacity (void) const noexcept
+        std::size_t capacity (void) const noexcept
         {
             return N - available.load ();
         }
@@ -599,7 +599,7 @@ namespace detail
         //      no state is modified, as if the function was not called.
         //
         template <typename ... Args>
-        inline void emplace (Args && ... args) noexcept(noexcept(T(args...)))
+        void emplace (Args && ... args) noexcept(noexcept(T(args...)))
         {
             auto write = rwlock.writer ();
             if (available.load() < N) {
@@ -631,7 +631,7 @@ namespace detail
         //
         // otherwise no guarantees are made whatsoever.
         //
-        inline void pop (void) noexcept (noexcept(~T()))
+        void pop (void) noexcept (noexcept(~T()))
         {
             auto write = rwlock.writer ();
             if (available.load()) {
@@ -654,7 +654,7 @@ namespace detail
         //      throws an exception catchable as std::exception;
         //      no state is modified, as if the function was not called.
         //
-        inline T front (void)
+        T front (void)
         {
             auto read = rwlock.reader ();
             if (available.load ()) {
@@ -678,7 +678,7 @@ namespace detail
         //      throws an exception catchable as std::exception;
         //      no state is modified, as if the function was not called.
         //
-        inline T read (void)
+        T read (void)
         {
             auto write = rwlock.writer ();
             if (available) {
@@ -749,7 +749,7 @@ namespace detail
         template <template <typename...> class OutputContainer = std::vector,
             typename = typename std::enable_if
                 <detail::has_reserve<OutputContainer<T>>::value>::type>
-        inline OutputContainer<T> read (std::size_t n)
+        OutputContainer<T> read (std::size_t n)
         {
             auto write = rwlock.writer ();
             if (n <= available) {
@@ -789,7 +789,7 @@ namespace detail
             typename = typename std::enable_if
                 <not detail::has_reserve<OutputContainer<T>>::value>::type,
             bool /*unused, avoids template redeclaration*/ = bool{}>
-        inline OutputContainer<T> read (std::size_t n)
+        OutputContainer<T> read (std::size_t n)
         {
             auto write = rwlock.writer ();
             if (n <= available) {
@@ -837,7 +837,7 @@ namespace detail
         template <template <typename...> class OutputContainer = std::vector,
             typename = typename std::enable_if
                 <detail::has_reserve<OutputContainer<T>>::value>::type>
-        inline OutputContainer<T> safe_read (std::size_t n)
+        OutputContainer<T> safe_read (std::size_t n)
         {
             auto write = rwlock.writer ();
             if (n <= available) {
@@ -881,7 +881,7 @@ namespace detail
             typename = typename std::enable_if
                 <not detail::has_reserve<OutputContainer<T>>::value>::type,
             bool /*unused, avoids template redeclaration*/ = bool{}>
-        inline OutputContainer<T> safe_read (std::size_t n)
+        OutputContainer<T> safe_read (std::size_t n)
         {
             auto write = rwlock.writer ();
             if (n <= available) {
@@ -913,7 +913,7 @@ namespace detail
         //      to the current progress of read up to the failure point.
         //
         template <template <typename...> class OutputContainer = std::vector>
-        inline OutputContainer<T> read_all (void)
+        OutputContainer<T> read_all (void)
         {
             return read<OutputContainer> (available);
         }
@@ -937,7 +937,7 @@ namespace detail
         //      no state is modified, as if the function was not called.
         //
         template <template <typename...> class OutputContainer = std::vector>
-        inline OutputContainer<T> safe_read_all (void)
+        OutputContainer<T> safe_read_all (void)
         {
             return safe_read<OutputContainer> (available);
         }
@@ -964,7 +964,7 @@ namespace detail
         //
         // otherwise no guarantees are made whatsoever.
         //
-        inline void erase (std::size_t n) noexcept (noexcept(~T()))
+        void erase (std::size_t n) noexcept (noexcept(~T()))
         {
             auto write = rwlock.writer ();
             auto m = std::min (n, available.load());
@@ -996,7 +996,7 @@ namespace detail
         //
         // otherwise no guarantees are made whatsoever.
         //
-        inline void clear (void) noexcept (noexcept (~T()))
+        void clear (void) noexcept (noexcept (~T()))
         {
             erase (available);
         }
