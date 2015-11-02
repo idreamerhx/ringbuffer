@@ -458,8 +458,8 @@ namespace detail
         inline void emplace (Args && ... args) noexcept(noexcept(T(args...)))
         {
             if (available < N) {
-                new (&writepos->data) T(args...);
-                writepos = wrapfront (writepos);
+                new (&writepos->data[0]) T(args...);
+                writepos   = wrapfront (writepos);
                 available += 1;
             }
         }
@@ -489,8 +489,8 @@ namespace detail
         inline void pop (void) noexcept (noexcept(~T()))
         {
             if (available) {
-                reinterpret_cast<T*>(&readpos->data)->~T();
-                readpos = wrapfront (readpos);
+                reinterpret_cast<T*>(&readpos->data[0])->~T();
+                readpos    = wrapfront (readpos);
                 available -= 1;
             }
         }
@@ -511,7 +511,7 @@ namespace detail
         inline T front (void)
         {
             if (available) {
-                return *readpos;
+                return *reinterpret_cast<T*>(&readpos->data[0]);
             } else {
                  throw std::out_of_range
                      ("cannot access first of empty ringbuffer");           
@@ -534,12 +534,48 @@ namespace detail
         inline T read (void)
         {
             if (available) {
+                auto const ptr = reinterpret_cast<T*>(&readpos->data[0]);
+                auto const val = *ptr;
+                readpos    = wrapfront (readpos);
                 available -= 1;
-                auto deref = readpos;
-                readpos = wrapfront (readpos);
-                return *reinterpret_cast<T*>(&deref->data);
+                ptr->~T();
+                return val;
             } else {
                 throw std::out_of_range ("invalid read on empty ringbuffer");
+            }
+        }
+
+
+        // read first n elements of ringbuffer with
+        // removal, if they exist, directly into memory
+        // pointed to by dst; otherwise throw
+        // std::out_of_range exception.
+        //
+        // Provided dst points to a valid memory location
+        // wide enough to accomodate the requested data:
+        //
+        // -- strong exception guarantee
+        //      (see https://en.wikipedia.org/wiki/Exception_safety)
+        //    this function either:
+        //      succeeds
+        //                  --- or ---
+        //      throws an exception catchable as std::exception;
+        //      no state is modified, as if the function was not called.
+        //
+        void read (std::size_t n, T * dst)
+        {
+            if (n <= available) {
+                auto cap = available - n;
+                while (available > cap) {
+                    auto const ptr = reinterpret_cast<T*>(&readpos->data);
+                    *dst++     = *ptr;
+                    readpos    = wrapfront (readpos);
+                    available -= 1;
+                    ptr->~T();
+                }
+            } else {
+                throw std::out_of_range
+                    ("cannot read more than availalbe elements");
             }
         }
  
@@ -570,10 +606,13 @@ namespace detail
                 OutputContainer<T> result;
                 result.reserve (n);
                 auto const cap = available - n;
-                while (available-- > cap) {
-                    auto deref = readpos;
+                while (available > cap) {
+                    auto const ptr = reinterpret_cast<T*>(&readpos->data);
+                    auto const val = *ptr;
+                    result.emplace_back (std::move(val));
                     readpos    = wrapfront (readpos);
-                    result.emplace_back (*reinterpret_cast<T*>(&deref->data));
+                    available -= 1;
+                    ptr->~T();
                 }
                 return result;
             } else {
@@ -605,10 +644,13 @@ namespace detail
             if (n <= available) {
                 OutputContainer<T> result;
                 auto const cap = available - n;
-                while (available-- > cap) {
-                    auto deref = readpos;
+                while (available > cap) {
+                    auto const ptr = reinterpret_cast<T*>(&readpos->data);
+                    auto const val = *ptr;
+                    result.emplace_back (std::move(val));
                     readpos    = wrapfront (readpos);
-                    result.emplace_back (*reinterpret_cast<T*>(&deref->data));
+                    available -= 1;
+                    ptr->~T();
                 }
                 return result;
             } else {
@@ -654,8 +696,8 @@ namespace detail
                     for (auto& e : tmpcopy)
                         result.emplace_back (std::move(e));
                 }
+                readpos    = wrapfront(readpos, n);
                 available -= n;
-                readpos = wrapfront(readpos, n);
                 return result;
             } else {
                 throw std::out_of_range
@@ -696,8 +738,8 @@ namespace detail
                     for (auto& e : tmpcopy)
                         result.emplace_back (std::move(e));
                 }
+                readpos    = wrapfront (readpos, n);
                 available -= n;
-                readpos = wrapfront (readpos, n);
                 return result;
             } else {
                 throw std::out_of_range
@@ -774,7 +816,7 @@ namespace detail
             auto m = std::min (n, available);
             while (m--) {
                 reinterpret_cast<T*>(&readpos->data)->~T();
-                readpos = wrapfront (readpos);
+                readpos    = wrapfront (readpos);
                 available -= 1;
             }
         }
